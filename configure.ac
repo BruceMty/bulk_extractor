@@ -430,11 +430,16 @@ AC_CHECK_HEADER([libewf.h],
 AC_CHECK_FUNCS([libewf_handle_get_utf8_header_value_notes libewf_error_backtrace_fprint])
 AC_CHECK_HEADERS([tsk3/libtsk.h])
 
-## EXPAT is now a main line requirements
-## for restarting
-AC_CHECK_HEADER([expat.h])
+### EXPAT is now a main line requirements
+### for restarting
+## dfxml needs expat
+AC_CHECK_HEADERS([expat.h])
 AC_CHECK_LIB([expat],[XML_ParserCreate])
 
+## LIBXML2 replaces EXPAT as a main line requirements
+CPPFLAGS="-I/usr/include/libxml2 $CPPFLAGS"
+AC_CHECK_HEADERS([libxml/parser.h])
+AC_CHECK_LIB([xml2], [xmlSAXUserParseFile])
 
 ################################################################
 ## hashid support

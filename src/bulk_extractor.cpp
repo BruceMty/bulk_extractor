@@ -22,8 +22,8 @@
 #include <unistd.h>
 #include <ctype.h>
 
-#ifdef HAVE_EXPAT_H
-#include <expat.h>
+#ifdef HAVE_LIBXML_PARSER_H
+#include <libxml/parser.h>
 #endif
 
 #ifdef HAVE_MCHECK
@@ -599,7 +599,7 @@ public:
 		}
 	    } else {
                 /* Not sampling */
-                if(it==p.end()) break;
+                if(!(it!=p.end())) break;
             }
             
             if(opt_offset_end!=0 && opt_offset_end <= it.raw_offset ){
@@ -713,12 +713,12 @@ public:
 
         /* Record the feature files and their counts in the output */
         xreport.push("feature_files");
-        for(feature_recorder_map::const_iterator it = tp.fs.frm.begin();
-            it != tp.fs.frm.end(); it++){
+        for(feature_recorder_map::const_iterator frm_it = tp.fs.frm.begin();
+            frm_it != tp.fs.frm.end(); frm_it++){
             xreport.set_oneline(true);
             xreport.push("feature_file");
-            xreport.xmlout("name",it->second->name);
-            xreport.xmlout("count",it->second->count);
+            xreport.xmlout("name",frm_it->second->name);
+            xreport.xmlout("count",frm_it->second->count);
             xreport.pop();
             xreport.set_oneline(false);
         }
@@ -727,11 +727,11 @@ public:
     
         xreport.xmlout("thread_wait",dtos(tp.waiting.elapsed_seconds()),"thread='0'",false);
         double worker_wait_average = 0;
-        for(threadpool::worker_vector::const_iterator it=tp.workers.begin();it!=tp.workers.end();it++){
-            worker_wait_average += (*it)->waiting.elapsed_seconds() / num_threads;
+        for(threadpool::worker_vector::const_iterator wv_it=tp.workers.begin();wv_it!=tp.workers.end();wv_it++){
+            worker_wait_average += (*wv_it)->waiting.elapsed_seconds() / num_threads;
             std::stringstream ss;
-            ss << "thread='" << (*it)->id << "'";
-            xreport.xmlout("thread_wait",dtos((*it)->waiting.elapsed_seconds()),ss.str(),false);
+            ss << "thread='" << (*wv_it)->id << "'";
+            xreport.xmlout("thread_wait",dtos((*wv_it)->waiting.elapsed_seconds()),ss.str(),false);
         }
         xreport.pop();
         xreport.flush();
@@ -755,41 +755,78 @@ public:
 };
 
 class bulk_extractor_restarter {
-    std::stringstream cdata;
+    private:
+    std::string cdata;
     std::string thisElement;
     std::string provided_filename;
     seen_page_ids_t &seen_page_ids;
-#ifdef HAVE_LIB_EXPAT
-    static void startElement(void *userData, const char *name_, const char **attrs) {
+#ifdef HAVE_LIBXML2
+    static void on_start_element(void *userData, const xmlChar *name_, const xmlChar **attrs) {
         class bulk_extractor_restarter &self = *(bulk_extractor_restarter *)userData;
-        self.cdata.str("");
-        self.thisElement = name_;
-        if(thisElement=="debug:work_start"){
-            for(int i=0;attrs[i];i+=2){
-                if(strcmp(attrs[i],"pos0")){
-                    std::cerr << "pos=0" << attrs[i+1] << "\n";
-                    self.seen_page_ids->insert(attrs[i+1]);
+        self.cdata = "";
+        self.thisElement = std::string((const char*)name_);
+        if(self.thisElement=="debug:work_start"){
+            if (attrs == NULL) {
+                return;
+            }
+            for(int i=0;attrs[i]&&attrs[i+1];i+=2){
+                if (xmlStrEqual(attrs[i], reinterpret_cast<const xmlChar*>("pos0"))) {
+                    std::string value((const char*)attrs[i+1]);
+                    std::cerr << "pos=0" << value << "\n";
+//                    seen_page_ids_t &temp = self.seen_page_ids;
+//                    temp.insert(value);
+// zzzzzz why did the old way work?  Did the old way work?
+// zzzzzz note: old way would have been: self.seen_page_ids->insert(value);
+// zzzzzz note: old way before port from expat:  self.seen_page_ids->insert(attrs[i+1]);
+
+                    self.seen_page_ids.insert(value);
                 }
             }
         }
     }
-    static void endElement(void *userData,const char *name_){
+
+    static void on_end_element(void *userData,const xmlChar *name_){
         class bulk_extractor_restarter &self = *(bulk_extractor_restarter *)userData;
-        if(self.thisElement=="provided_filename") self.provided_filename = self.cdata.str();
-        self.cdata.str("");
+        if(self.thisElement=="provided_filename") {
+           self.provided_filename = self.cdata;
+        }
+        self.cdata = "";
     }
-    static void characterDataHandler(void *userData,const XML_Char *s,int len){ 
+
+    static void on_characters(void *userData,const xmlChar *s,int len){ 
         class bulk_extractor_restarter &self = *(bulk_extractor_restarter *)userData;
-        self.cdata.write(s,len);
+
+        char temp_chars[len+1];
+        strncpy(temp_chars, (const char*) s, len);
+        temp_chars[len] = (char)NULL;
+        self.cdata = std::string(temp_chars);
+    }
+
+    static void on_warning(void *userData ATTRIBUTE_UNUSED,
+                           const char* msg,
+                           ...) {
+        std::cout << "XML warning on restart: " << msg << std::endl;
+    }
+
+    static void on_error(void *userData ATTRIBUTE_UNUSED,
+                         const char* msg,
+                         ...) {
+        std::cerr << "XML error on restart: " << msg << std::endl;
+    }
+
+    static void on_fatal_error(void *userData ATTRIBUTE_UNUSED,
+                               const char* msg,
+                               ...) {
+        std::cerr << "XML fatal error on restart: " << msg << std::endl;
     }
 #endif
 
-public:;
+public:
     bulk_extractor_restarter(const std::string &opt_outdir,
                              const std::string &reportfilename,
                              const std::string &image_fname,
-                             seen_page_ids_t &seen_page_ids_):cdata(),thisElement(),provided_filename(),seen_page_ids(seen_page_ids_){
-#ifdef HAVE_LIB_EXPAT
+                             seen_page_ids_t &seen_page_ids_):cdata(""),thisElement(),provided_filename(),seen_page_ids(seen_page_ids_){
+#ifdef HAVE_LIBXML2
         if(access(reportfilename.c_str(),R_OK)){
             std::cerr << opt_outdir << ": error\n";
             std::cerr << "report.xml file is missing or unreadable.\n";
@@ -797,33 +834,49 @@ public:;
             std::cerr << "Cannot continue.\n";
             exit(1);
         }
-	
-        XML_Parser parser = XML_ParserCreate(NULL);
-        XML_SetUserData(parser, this);
-        XML_SetElementHandler(parser, startElement, endElement);
-        XML_SetCharacterDataHandler(parser,characterDataHandler);
-        std::fstream in(reportfilename.c_str());
-        if(!in.is_open()){
-            std::cout << "Cannot open " << fname << ": " << strerror(errno) << "\n";
+
+        // set up the sax callback data structure with context-relavent handlers
+        xmlSAXHandler sax_handlers = {
+               NULL,			// internalSubset
+               NULL,			// isStandalone
+               NULL,			// hasInternalSubset
+               NULL,			// hasExternalSubset
+               NULL,			// resolveEntity
+               NULL,			// getEntity
+               NULL,			// entityDecl
+               NULL,			// notationDecl
+               NULL,			// attributeDecl
+               NULL,			// elementDecl
+               NULL,			// unparsedEntityDecl
+               NULL,			// setDocumentLocator
+               NULL,			// startDocument
+               NULL,			// endDocument
+               on_start_element,	// startElement
+               on_end_element,		// endElement
+               NULL,			// reference
+               on_characters,		// characters
+               NULL,			// ignorableWhitespace
+               NULL,			// processingInstruction
+               NULL,			// comment
+               on_warning,		// xmlParserWarning
+               on_error,		// xmlParserError
+               on_fatal_error,		// xmlParserFatalError
+               NULL,			// getParameterEntity
+               NULL,			// cdataBlock
+               NULL,			// externalSubset
+               1     			// is initialized
+        };
+
+        // perform the parsing
+        int success = xmlSAXUserParseFile(
+                           &sax_handlers, this, reportfilename.c_str());
+
+        if (success != 0) {
+            // parse failure
+            std::cerr << "XML error" << std::endl;
             exit(1);
         }
-        try {
-            bool error = false;
-            std::string line;
-            while(getline(in,line) && !error){
-                if (!XML_Parse(parser, line.c_str(), line.size(), 0)) {
-                    std::cout << "XML Error: " << XML_ErrorString(XML_GetErrorCode(parser))
-                              << " at line " << XML_GetCurrentLineNumber(parser) << "\n";
-                    error = true;
-                    break;
-                }
-            }
-            if(!error) XML_Parse(parser, "", 0, 1);    // clear the parser
-        }
-        catch (const std::exception &e) {
-            std::cout << "ERROR: " << e.what() << "\n";
-        }
-        XML_ParserFree(parser);
+	
         if(image_fname != provided_filename){
             std::cerr << "Error: \n" << image_fname << " != " << provided_filename << "\n";
             exit(1);
