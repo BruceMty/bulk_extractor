@@ -873,8 +873,7 @@ public:
 
         if (success != 0) {
             // parse failure
-            std::cerr << "XML error" << std::endl;
-            exit(1);
+            std::cerr << "XML error received but an error is expected" << std::endl;
         }
 	
         if(image_fname != provided_filename){
